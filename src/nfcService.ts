@@ -95,6 +95,17 @@ export function guessCardFromSak(sak?: number): string | undefined {
   }
 }
 
+// ATQA/SAK okunamayan telefonlarda teknoloji listesine bakarak kabaca tür tahmini (kesin değildir).
+export function guessCardFromTech(techs: string[]): string | undefined {
+  if (techs.includes('MifareClassic')) return 'MIFARE Classic ailesi (1K, 4K veya Mini). İçeriği anahtarla korunur';
+  if (techs.includes('MifareUltralight')) return 'MIFARE Ultralight / NTAG türü etiket';
+  if (techs.includes('IsoDep')) return 'ISO-DEP (ISO 14443-4) kart: akıllı kart, DESFire veya banka/ödeme kartı olabilir';
+  if (techs.includes('NfcV')) return 'ISO 15693 (NfcV) etiket';
+  if (techs.includes('NfcF')) return 'FeliCa (NfcF) kart';
+  if (techs.includes('NfcB')) return 'ISO 14443-B kart';
+  return undefined;
+}
+
 export async function scanAnyTag(): Promise<TagInfo> {
   return withTechnology(ALL_TECHS, async (connected) => {
     const tag: any = await NfcManager.getTag();
@@ -118,17 +129,18 @@ export async function scanAnyTag(): Promise<TagInfo> {
     }
 
     const idClean = String(tag.id ?? '').replace(/[^0-9a-f]/gi, '');
+    const techs: string[] = (tag.techTypes ?? []).map(shortTech);
     return {
       id: formatUid(tag.id),
       idLength: Math.floor(idClean.length / 2),
-      techTypes: (tag.techTypes ?? []).map(shortTech),
+      techTypes: techs,
       connectedTech: connected ? shortTech(connected) : undefined,
       type: tag.type,
       maxSize: tag.maxSize,
       isWritable: tag.isWritable,
       atqa,
       sak,
-      cardGuess: guessCardFromSak(sakNumber),
+      cardGuess: guessCardFromSak(sakNumber) ?? guessCardFromTech(techs),
       ndefText: decodeNdefRecords(tag.ndefMessage ?? []),
     };
   });
@@ -138,6 +150,11 @@ export async function writeNdefText(value: string): Promise<void> {
   const text = value.trim();
   if (!text) throw new Error('Yazılacak metin boş olamaz.');
   await withTechnology(NfcTech.Ndef, async () => {
+    const tag: any = await NfcManager.getTag();
+    const techs: string[] = (tag?.techTypes ?? []).map(shortTech);
+    if (!techs.includes('Ndef')) {
+      throw new Error(`Bu kart NDEF yazmayı desteklemiyor (kartın teknolojileri: ${techs.join(', ') || 'bilinmiyor'}). NDEF yazmak için NDEF biçimli bir NTAG etiketi kullan.`);
+    }
     const bytes = Ndef.encodeMessage([Ndef.textRecord(text)]);
     if (!bytes?.length) throw new Error('NDEF mesajı oluşturulamadı.');
     await NfcManager.ndefHandler.writeNdefMessage(bytes);
@@ -186,6 +203,13 @@ function userBytesFromHeader(header: number[][]): { userBytes: number; kind: str
   return { userBytes: 48, kind: 'MIFARE Ultralight tipi (48 bayt kullanıcı alanı)' };
 }
 
+function requireUltralight(tag: any): void {
+  const techs: string[] = (tag?.techTypes ?? []).map(shortTech);
+  if (!techs.includes('MifareUltralight')) {
+    throw new Error(`Bu kart NTAG / MIFARE Ultralight türü değil (kartın teknolojileri: ${techs.join(', ') || 'bilinmiyor'}). KOPYALA sekmesi yalnızca NTAG ve Ultralight kartlarda çalışır.`);
+  }
+}
+
 function splitPages(bytes: number[]): number[][] {
   const pages: number[][] = [];
   for (let i = 0; i + 3 < bytes.length; i += 4) pages.push(bytes.slice(i, i + 4));
@@ -196,6 +220,7 @@ export async function readUltralightDump(): Promise<UltralightDump> {
   return withTechnology(NfcTech.MifareUltralight, async () => {
     const h = ulHandler();
     const tag: any = await NfcManager.getTag();
+    requireUltralight(tag);
     const header = splitPages(await h.mifareUltralightReadPages(0)).slice(0, 4);
     if (header.length < 4) throw new Error('Kartın başlık bilgisi okunamadı.');
     const { userBytes, kind } = userBytesFromHeader(header);
@@ -216,6 +241,7 @@ export async function writeUltralightDump(dump: UltralightDump): Promise<{ writt
   return withTechnology(NfcTech.MifareUltralight, async () => {
     const h = ulHandler();
     const tag: any = await NfcManager.getTag();
+    requireUltralight(tag);
     if (formatUid(tag?.id) === dump.id) {
       throw new Error('Bu, kaynak kartın kendisi. Veriyi yazmak için boş ve farklı bir kart okut.');
     }

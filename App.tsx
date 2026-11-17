@@ -122,8 +122,8 @@ export default function App() {
             <Info label="UID uzunluğu" value={tag.idLength ? `${tag.idLength} bayt` : 'Bilinmiyor'} />
             <Info label="Teknolojiler" value={tag.techTypes.join(', ') || 'Bilinmiyor'} />
             <Info label="Bağlanılan teknoloji" value={tag.connectedTech || 'Bilinmiyor'} />
-            <Info label="ATQA" value={tag.atqa || 'Okunamadı'} />
-            <Info label="SAK" value={tag.sak || 'Okunamadı'} />
+            <Info label="ATQA" value={tag.atqa || 'Bu telefonda okunamadı'} />
+            <Info label="SAK" value={tag.sak || 'Bu telefonda okunamadı'} />
             <Info label="Tahmini tür (kesin değil)" value={tag.cardGuess || 'Tahmin edilemedi'} />
             <Info label="Etiket türü" value={tag.type || 'Bilinmiyor'} />
             <Info label="Maksimum kapasite" value={tag.maxSize ? `${tag.maxSize} bayt` : 'Bilinmiyor'} />
@@ -187,6 +187,9 @@ function Info({ label, value }: { label: string; value: string }) {
 function errorText(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
   if (/cancel/i.test(msg)) return 'İşlem iptal edildi.';
+  if (/unsupported tag api/i.test(msg)) return `Bu kart bu işlemi desteklemiyor.\n(teknik: ${msg})`;
+  if (/null object reference/i.test(msg)) return `Bu kart bu işlem için uygun türde değil.\n(teknik: ${msg})`;
+  if (/transceive fail/i.test(msg)) return `Kart cevap vermedi veya bağlantı koptu. Kartı telefonun arkasında sabit tutup tekrar dene.\n(teknik: ${msg})`;
   return msg;
 }
 
