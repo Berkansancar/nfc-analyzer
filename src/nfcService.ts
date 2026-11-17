@@ -156,6 +156,104 @@ export async function sendIsoDepApdu(hex: string): Promise<string> {
   });
 }
 
+// ---------- NTAG / MIFARE Ultralight: ham veriyi oku, göster, kopyala ----------
+
+export type UltralightDump = {
+  id: string;
+  header: number[][];       // sayfa 0-3 (UID, kilit, yetenek bilgisi): gösterilir, KOPYALANMAZ
+  userStartPage: number;    // kullanıcı verisinin ilk sayfası (4)
+  pages: number[][];        // kullanıcı verisi, her sayfa 4 bayt
+  userBytes: number;
+  kind: string;
+};
+
+function ulHandler(): any {
+  const h = (NfcManager as any).mifareUltralightHandlerAndroid;
+  if (!h?.mifareUltralightReadPages || !h?.mifareUltralightWritePage) {
+    throw new Error('Bu uygulama sürümünde NTAG/Ultralight okuma-yazma desteği bulunamadı.');
+  }
+  return h;
+}
+
+// Kapasiteyi sayfa 3'ten (Capability Container) anlar. NTAG'de ilk bayt 0xE1, 3. bayt = boyut/8.
+function userBytesFromHeader(header: number[][]): { userBytes: number; kind: string } {
+  const cc = header[3] ?? [];
+  if (cc[0] === 0xe1) {
+    const n = (cc[2] ?? 0) * 8;
+    if (n <= 0 || n > 888) throw new Error('Kartın kapasitesi okunamadı.');
+    return { userBytes: n, kind: `NTAG tipi (${n} bayt kullanıcı alanı)` };
+  }
+  return { userBytes: 48, kind: 'MIFARE Ultralight tipi (48 bayt kullanıcı alanı)' };
+}
+
+function splitPages(bytes: number[]): number[][] {
+  const pages: number[][] = [];
+  for (let i = 0; i + 3 < bytes.length; i += 4) pages.push(bytes.slice(i, i + 4));
+  return pages;
+}
+
+export async function readUltralightDump(): Promise<UltralightDump> {
+  return withTechnology(NfcTech.MifareUltralight, async () => {
+    const h = ulHandler();
+    const tag: any = await NfcManager.getTag();
+    const header = splitPages(await h.mifareUltralightReadPages(0)).slice(0, 4);
+    if (header.length < 4) throw new Error('Kartın başlık bilgisi okunamadı.');
+    const { userBytes, kind } = userBytesFromHeader(header);
+    const userPages = userBytes / 4;
+    const pages: number[][] = [];
+    for (let p = 4; p < 4 + userPages; p += 4) {
+      const chunk = splitPages(await h.mifareUltralightReadPages(p));
+      for (const page of chunk) {
+        if (pages.length < userPages) pages.push(page);
+      }
+    }
+    if (pages.length !== userPages) throw new Error('Kart verisi eksik okundu. Kartı sabit tutup tekrar dene.');
+    return { id: formatUid(tag?.id), header, userStartPage: 4, pages, userBytes, kind };
+  });
+}
+
+export async function writeUltralightDump(dump: UltralightDump): Promise<{ written: number; verified: boolean }> {
+  return withTechnology(NfcTech.MifareUltralight, async () => {
+    const h = ulHandler();
+    const tag: any = await NfcManager.getTag();
+    if (formatUid(tag?.id) === dump.id) {
+      throw new Error('Bu, kaynak kartın kendisi. Veriyi yazmak için boş ve farklı bir kart okut.');
+    }
+    const header = splitPages(await h.mifareUltralightReadPages(0)).slice(0, 4);
+    if (header.length < 4) throw new Error('Hedef kartın başlık bilgisi okunamadı.');
+    const target = userBytesFromHeader(header);
+    if (target.userBytes < dump.userBytes) {
+      throw new Error(`Hedef kartın kapasitesi (${target.userBytes} bayt) kaynak kartınkinden (${dump.userBytes} bayt) küçük.`);
+    }
+    // Sayfa 0-3 (UID, kilit baytları, OTP) ASLA yazılmaz; yanlış yazım kartı kalıcı kilitleyebilir.
+    for (let i = 0; i < dump.pages.length; i++) {
+      await h.mifareUltralightWritePage(dump.userStartPage + i, dump.pages[i]);
+    }
+    // Doğrulama: yazılanı geri oku ve karşılaştır
+    const back: number[][] = [];
+    for (let p = dump.userStartPage; p < dump.userStartPage + dump.pages.length; p += 4) {
+      for (const page of splitPages(await h.mifareUltralightReadPages(p))) {
+        if (back.length < dump.pages.length) back.push(page);
+      }
+    }
+    const verified = back.length === dump.pages.length &&
+      back.every((pg, i) => pg.every((b, j) => b === dump.pages[i][j]));
+    return { written: dump.pages.length, verified };
+  });
+}
+
+export function formatDump(dump: UltralightDump): string {
+  const line = (page: number, b: number[]) =>
+    `${String(page).padStart(3, '0')}: ${toHex(b)}  ${b.map((c) => (c >= 32 && c < 127 ? String.fromCharCode(c) : '.')).join('')}`;
+  const head = dump.header.map((b, i) => line(i, b)).join('\n');
+  const body = dump.pages.map((b, i) => line(dump.userStartPage + i, b)).join('\n');
+  return `BAŞLIK (kopyalanmaz)\n${head}\n\nKULLANICI VERİSİ\n${body}`;
+}
+
+export async function cancelNfc(): Promise<void> {
+  try { await NfcManager.cancelTechnologyRequest(); } catch {}
+}
+
 export function toHex(bytes: number[] | Uint8Array): string {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join(' ').toUpperCase();
 }

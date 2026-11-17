@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import {
   SafeAreaView, ScrollView, View, Text, TextInput, Pressable,
-  StyleSheet, ActivityIndicator, StatusBar, Platform
+  StyleSheet, ActivityIndicator, StatusBar, Platform, Alert
 } from 'react-native';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
-import { initNfc, scanAnyTag, writeNdefText, sendIsoDepApdu, TagInfo } from './src/nfcService';
+import {
+  initNfc, scanAnyTag, writeNdefText, sendIsoDepApdu, TagInfo,
+  readUltralightDump, writeUltralightDump, formatDump, cancelNfc, UltralightDump
+} from './src/nfcService';
 
-type Tab = 'scan' | 'write' | 'apdu';
+type Tab = 'scan' | 'write' | 'apdu' | 'copy';
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('scan');
@@ -16,6 +19,7 @@ export default function App() {
   const [tag, setTag] = useState<TagInfo | null>(null);
   const [textValue, setTextValue] = useState('Merhaba NFC!');
   const [apdu, setApdu] = useState('00 A4 04 00 00');
+  const [dump, setDump] = useState<UltralightDump | null>(null);
 
   useEffect(() => {
     initNfc().then(setReady).catch((e) => {
@@ -51,6 +55,36 @@ export default function App() {
     setLog(`APDU yanıtı:\n${response}\n\nSon iki bayt genellikle durum kodudur (SW1 SW2).`);
   });
 
+  const readDump = () => run(async () => {
+    setLog('NTAG / Ultralight kartı bekleniyor. Kartı telefonun arkasına yaklaştır ve sabit tut.');
+    const result = await readUltralightDump();
+    setDump(result);
+    setLog(`Okundu: ${result.kind}\nUID: ${result.id}\n${result.pages.length} sayfa kullanıcı verisi hafızada. Şimdi "BAŞKA KARTA YAZ" ile boş karta kopyalayabilirsin.`);
+  });
+
+  const copyDump = async () => {
+    if (loading || !dump) return;
+    const ok = await new Promise<boolean>((resolve) => {
+      Alert.alert(
+        'Kartın üzerine yazılsın mı?',
+        'Hedef kartın mevcut verisi silinip kaynak kartın verisi yazılacak. Boş veya önemsiz bir kart kullan. Kartın kimlik numarası (UID) kopyalanmaz.',
+        [
+          { text: 'Vazgeç', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Yaz', style: 'destructive', onPress: () => resolve(true) },
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) }
+      );
+    });
+    if (!ok) return;
+    await run(async () => {
+      setLog('HEDEF (boş) kartı bekleniyor. Kaynak kartı çek, boş kartı telefonun arkasına yaklaştır ve sabit tut.');
+      const res = await writeUltralightDump(dump);
+      setLog(res.verified
+        ? `${res.written} sayfa yazıldı ve geri okunarak doğrulandı. Kopyalama tamam.`
+        : `${res.written} sayfa yazıldı ama doğrulama tutmadı. Kartı tekrar okutup kontrol et.`);
+    });
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
       <ExpoStatusBar style="light" />
@@ -72,7 +106,7 @@ export default function App() {
         </View>
 
         <View style={styles.tabs}>
-          {([['scan', 'TARA'], ['write', 'NDEF YAZ'], ['apdu', 'APDU']] as const).map(([key, label]) => (
+          {([['scan', 'TARA'], ['write', 'NDEF YAZ'], ['apdu', 'APDU'], ['copy', 'KOPYALA']] as const).map(([key, label]) => (
             <Pressable key={key} onPress={() => setTab(key)} style={[styles.tab, tab === key && styles.tabActive]}>
               <Text style={[styles.tabText, tab === key && styles.tabTextActive]}>{label}</Text>
             </Pressable>
@@ -116,10 +150,25 @@ export default function App() {
           <Text style={styles.note}>Not: Örnek komut her karta uygun değildir. Kartın desteklediği komutları kullan.</Text>
         </View>}
 
+        {tab === 'copy' && <View style={styles.card}>
+          <Text style={styles.cardTitle}>Kart verisi: oku ve kopyala</Text>
+          <Text style={styles.description}>NTAG ve MIFARE Ultralight türü kartların içeriğini hex ve metin olarak gösterir, sonra başka bir boş karta yazar. Yalnızca veri kopyalanır, kartın kimlik numarası (UID) kopyalanmaz. Şifreli kartlar (yakıt, kapı, ulaşım kartı) bu yöntemle okunamaz.</Text>
+          <Button label="1) KAYNAK KARTI OKU" onPress={readDump} loading={loading} />
+          <View style={{ height: 10 }} />
+          <Button label="2) BAŞKA KARTA YAZ" onPress={copyDump} loading={loading} disabled={!dump} />
+          {dump && <View style={styles.result}>
+            <Info label="Kart" value={dump.kind} />
+            <Info label="UID" value={dump.id} />
+            <Text style={styles.label}>HAM VERİ (SAYFA: HEX  METİN)</Text>
+            <Text selectable style={styles.mono}>{formatDump(dump)}</Text>
+          </View>}
+        </View>}
+
         <View style={styles.logCard}>
           <Text style={styles.label}>İŞLEM DURUMU</Text>
           <Text selectable style={styles.logText}>{log}</Text>
           {loading && <ActivityIndicator style={{ marginTop: 12 }} color="#8CA8FF" />}
+          {loading && <Pressable onPress={cancelNfc} style={styles.cancel}><Text style={styles.cancelText}>İPTAL</Text></Pressable>}
         </View>
         <Text style={styles.footer}>NFC Analyzer • Yerel cihaz işlemleri • v1.0.0</Text>
       </ScrollView>
@@ -127,8 +176,8 @@ export default function App() {
   );
 }
 
-function Button({ label, onPress, loading }: { label: string; onPress: () => void; loading: boolean }) {
-  return <Pressable disabled={loading} onPress={onPress} style={({ pressed }) => [styles.button, (pressed || loading) && { opacity: 0.65 }]}>
+function Button({ label, onPress, loading, disabled }: { label: string; onPress: () => void; loading: boolean; disabled?: boolean }) {
+  return <Pressable disabled={loading || disabled} onPress={onPress} style={({ pressed }) => [styles.button, (pressed || loading || disabled) && { opacity: disabled ? 0.35 : 0.65 }]}>
     {loading ? <ActivityIndicator color="#07101D" /> : <Text style={styles.buttonText}>{label}</Text>}
   </Pressable>;
 }
@@ -136,8 +185,9 @@ function Info({ label, value }: { label: string; value: string }) {
   return <View style={styles.infoRow}><Text style={styles.infoLabel}>{label}</Text><Text selectable style={styles.infoValue}>{value}</Text></View>;
 }
 function errorText(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  return String(e);
+  const msg = e instanceof Error ? e.message : String(e);
+  if (/cancel/i.test(msg)) return 'İşlem iptal edildi.';
+  return msg;
 }
 
 const styles = StyleSheet.create({
@@ -172,5 +222,8 @@ const styles = StyleSheet.create({
   note: { color: '#E5B86A', fontSize: 11, lineHeight: 17, marginTop: 13 },
   logCard: { backgroundColor: '#0D1626', borderRadius: 14, padding: 15, marginTop: 16, borderWidth: 1, borderColor: '#202D45' },
   logText: { color: '#D9E2F5', fontSize: 12, lineHeight: 19 },
+  mono: { color: '#D9E2F5', fontSize: 11, lineHeight: 17, fontFamily: Platform.select({ android: 'monospace', default: 'Courier' }) },
+  cancel: { marginTop: 12, borderWidth: 1, borderColor: '#F4B860', borderRadius: 10, padding: 11, alignItems: 'center' },
+  cancelText: { color: '#F4B860', fontSize: 12, fontWeight: '900', letterSpacing: 0.6 },
   footer: { textAlign: 'center', color: '#53617A', fontSize: 10, marginTop: 22 }
 });

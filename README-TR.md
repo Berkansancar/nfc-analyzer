@@ -7,6 +7,7 @@ Bu klasör, React Native + Expo Development Build kullanan NFC Analyzer kaynak p
 - NDEF etiket tarama: UID, teknoloji türleri ve NDEF kayıtları
 - NDEF metin yazma
 - ISO-DEP üzerinden kullanıcı tarafından girilen APDU komutunu gönderme ve yanıtı HEX gösterme
+- KOPYALA sekmesi: NTAG / MIFARE Ultralight türü kartların verisini hex ve metin olarak gösterir, boş bir karta yazar ve geri okuyarak doğrular (UID ve kilit sayfaları kopyalanmaz)
 - Türkçe arayüz
 
 ## Önemli
