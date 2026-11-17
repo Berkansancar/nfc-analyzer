@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "NFC Analyzer",
+    "slug": "nfc-analyzer",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "android": {
+      "package": "com.berkansancar.nfcanalyzer",
+      "permissions": [
+        "android.permission.NFC"
+      ],
+      "blockedPermissions": []
+    },
+    "plugins": [
+      "react-native-nfc-manager"
+    ]
+  }
+}
