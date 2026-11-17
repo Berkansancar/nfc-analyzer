@@ -4,7 +4,7 @@ import {
   StyleSheet, ActivityIndicator, StatusBar, Platform
 } from 'react-native';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
-import { initNfc, scanNdefTag, writeNdefText, sendIsoDepApdu, TagInfo } from './src/nfcService';
+import { initNfc, scanAnyTag, writeNdefText, sendIsoDepApdu, TagInfo } from './src/nfcService';
 
 type Tab = 'scan' | 'write' | 'apdu';
 
@@ -33,8 +33,8 @@ export default function App() {
   };
 
   const scan = () => run(async () => {
-    setLog('NDEF etiketi bekleniyor. Telefonun NFC antenini etikete yaklaştır.');
-    const result = await scanNdefTag();
+    setLog('Kart bekleniyor. Kartı telefonun arkasındaki NFC bölgesine yaklaştır ve sabit tut.');
+    const result = await scanAnyTag();
     setTag(result);
     setLog('Tarama tamamlandı.');
   });
@@ -80,13 +80,18 @@ export default function App() {
         </View>
 
         {tab === 'scan' && <View style={styles.card}>
-          <Text style={styles.cardTitle}>Etiket tarama</Text>
-          <Text style={styles.description}>NDEF destekli bir NFC etiketi telefona yaklaştır. UID, teknoloji ve NDEF kayıtları görüntülenir.</Text>
-          <Button label="NFC ETİKETİNİ TARA" onPress={scan} loading={loading} />
+          <Text style={styles.cardTitle}>Kart / etiket tarama</Text>
+          <Text style={styles.description}>Herhangi bir NFC kartını veya etiketini telefona yaklaştır. UID, teknoloji listesi, ATQA, SAK ve (varsa) NDEF kayıtları görüntülenir. Şifreli kart içeriği okunamaz.</Text>
+          <Button label="KARTI TARA" onPress={scan} loading={loading} />
           {tag && <View style={styles.result}>
-            <Info label="UID" value={tag.id} />
-            <Info label="Teknoloji" value={tag.techTypes.join(', ') || 'Bilinmiyor'} />
-            <Info label="Tür" value={tag.type || 'Bilinmiyor'} />
+            <Info label="UID (kart kimliği)" value={tag.id} />
+            <Info label="UID uzunluğu" value={tag.idLength ? `${tag.idLength} bayt` : 'Bilinmiyor'} />
+            <Info label="Teknolojiler" value={tag.techTypes.join(', ') || 'Bilinmiyor'} />
+            <Info label="Bağlanılan teknoloji" value={tag.connectedTech || 'Bilinmiyor'} />
+            <Info label="ATQA" value={tag.atqa || 'Okunamadı'} />
+            <Info label="SAK" value={tag.sak || 'Okunamadı'} />
+            <Info label="Tahmini tür (kesin değil)" value={tag.cardGuess || 'Tahmin edilemedi'} />
+            <Info label="Etiket türü" value={tag.type || 'Bilinmiyor'} />
             <Info label="Maksimum kapasite" value={tag.maxSize ? `${tag.maxSize} bayt` : 'Bilinmiyor'} />
             <Info label="Yazılabilir" value={tag.isWritable === undefined ? 'Bilinmiyor' : tag.isWritable ? 'Evet' : 'Hayır'} />
             <Text style={styles.label}>NDEF İÇERİĞİ</Text>

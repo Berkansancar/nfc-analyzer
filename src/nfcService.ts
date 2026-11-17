@@ -2,10 +2,15 @@ import NfcManager, { Ndef, NfcTech } from 'react-native-nfc-manager';
 
 export type TagInfo = {
   id: string;
+  idLength: number;
   techTypes: string[];
+  connectedTech?: string;
   type?: string;
   maxSize?: number;
   isWritable?: boolean;
+  atqa?: string;
+  sak?: string;
+  cardGuess?: string;
   ndefText: string[];
 };
 
@@ -22,15 +27,15 @@ export async function initNfc(): Promise<boolean> {
   return NfcManager.isEnabled();
 }
 
-async function withTechnology<T>(tech: NfcTech, action: () => Promise<T>): Promise<T> {
+async function withTechnology<T>(tech: NfcTech | NfcTech[], action: (connected: string | null) => Promise<T>): Promise<T> {
   if (busy) throw new Error('Başka bir NFC işlemi devam ediyor.');
   busy = true;
   let requested = false;
   try {
     await initNfc();
     requested = true;
-    await NfcManager.requestTechnology(tech);
-    return await action();
+    const connected = (await NfcManager.requestTechnology(tech)) as unknown as string | null;
+    return await action(connected ?? null);
   } finally {
     try {
       if (requested) await NfcManager.cancelTechnologyRequest();
@@ -54,16 +59,76 @@ function decodeNdefRecords(records: any[] = []): string[] {
   });
 }
 
-export async function scanNdefTag(): Promise<TagInfo> {
-  return withTechnology(NfcTech.Ndef, async () => {
-    const tag = await NfcManager.getTag();
-    if (!tag) throw new Error('Etiket bilgisi alınamadı.');
+// Her tür NFC kartı/etiketi için: NfcA ilk sırada, çünkü ATQA ve SAK ancak NfcA bağlıyken okunabilir.
+const ALL_TECHS = [
+  NfcTech.NfcA,
+  NfcTech.IsoDep,
+  NfcTech.MifareClassic,
+  NfcTech.MifareUltralight,
+  NfcTech.Ndef,
+  NfcTech.NfcB,
+  NfcTech.NfcF,
+  NfcTech.NfcV,
+];
+
+export function shortTech(name: string): string {
+  return String(name).replace(/^android\.nfc\.tech\./, '');
+}
+
+export function formatUid(id?: string): string {
+  const clean = String(id ?? '').replace(/[^0-9a-f]/gi, '');
+  if (!clean) return 'Bilinmiyor';
+  return (clean.match(/.{1,2}/g) ?? []).join(' ').toUpperCase();
+}
+
+// SAK değerine göre kabaca kart türü tahmini (kesin değildir).
+export function guessCardFromSak(sak?: number): string | undefined {
+  switch (sak) {
+    case 0x00: return 'MIFARE Ultralight / NTAG türü etiket olabilir';
+    case 0x08: return 'MIFARE Classic 1K olabilir';
+    case 0x09: return 'MIFARE Mini olabilir';
+    case 0x18: return 'MIFARE Classic 4K olabilir';
+    case 0x20: return 'ISO-DEP (ISO 14443-4) kart: akıllı kart, DESFire veya banka/ödeme kartı olabilir';
+    case 0x28: return 'MIFARE Classic 1K + ISO-DEP olabilir';
+    case 0x38: return 'MIFARE Classic 4K + ISO-DEP olabilir';
+    default: return sak === undefined ? undefined : 'Bilinmeyen tür';
+  }
+}
+
+export async function scanAnyTag(): Promise<TagInfo> {
+  return withTechnology(ALL_TECHS, async (connected) => {
+    const tag: any = await NfcManager.getTag();
+    if (!tag) throw new Error('Kart bilgisi alınamadı.');
+
+    let atqa: string | undefined;
+    let sak: string | undefined;
+    let sakNumber: number | undefined;
+    if (connected === NfcTech.NfcA) {
+      try {
+        const a = await (NfcManager as any).nfcAHandler?.getAtqa?.();
+        if (a !== undefined && a !== null) atqa = Array.isArray(a) ? toHex(a) : String(a);
+      } catch {}
+      try {
+        const k = await (NfcManager as any).nfcAHandler?.getSak?.();
+        if (typeof k === 'number') {
+          sakNumber = k & 0xff;
+          sak = sakNumber.toString(16).padStart(2, '0').toUpperCase();
+        }
+      } catch {}
+    }
+
+    const idClean = String(tag.id ?? '').replace(/[^0-9a-f]/gi, '');
     return {
-      id: tag.id ?? 'Bilinmiyor',
-      techTypes: tag.techTypes ?? [],
+      id: formatUid(tag.id),
+      idLength: Math.floor(idClean.length / 2),
+      techTypes: (tag.techTypes ?? []).map(shortTech),
+      connectedTech: connected ? shortTech(connected) : undefined,
       type: tag.type,
       maxSize: tag.maxSize,
       isWritable: tag.isWritable,
+      atqa,
+      sak,
+      cardGuess: guessCardFromSak(sakNumber),
       ndefText: decodeNdefRecords(tag.ndefMessage ?? []),
     };
   });
